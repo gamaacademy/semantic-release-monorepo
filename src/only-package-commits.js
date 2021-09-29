@@ -7,6 +7,9 @@ const debug = require('debug')('semantic-release:monorepo');
 const { getCommitFiles, getRoot } = require('./git-utils');
 const { mapCommits } = require('./options-transforms');
 
+const packageJson = require(`${process.cwd()}/package.json`);
+const Path = require('path');
+
 const memoizedGetCommitFiles = memoizeWith(identity, getCommitFiles);
 
 /**
@@ -33,31 +36,41 @@ const withFiles = async commits => {
 
 const onlyPackageCommits = async commits => {
   const packagePath = await getPackagePath();
-  debug('Filter commits by package path: "%s"', packagePath);
+
+  // returns packages related to this
+  const settings = packageJson['semantic-release-monorepo'] ?? {};
+  const includePaths = settings['include-paths'] ?? [];
+
+  // handle with all packages at once
+  const allPackages = [packagePath, ...includePaths];
+
+  debug('Filter commits by package path: "%s"', allPackages.join(', '));
   const commitsWithFiles = await withFiles(commits);
-  // Convert package root path into segments - one for each folder
-  const packageSegments = packagePath.split(path.sep);
 
   return commitsWithFiles.filter(({ files, subject }) => {
-    // Normalise paths and check if any changed files' path segments start
-    // with that of the package root.
-    const packageFile = files.find(file => {
+    // read each file to validate if it is part of the package
+    const validFile = files.find(file => {
       const fileSegments = path.normalize(file).split(path.sep);
-      // Check the file is a *direct* descendent of the package folder (or the folder itself)
-      return packageSegments.every(
-        (packageSegment, i) => packageSegment === fileSegments[i]
-      );
+
+      // validate the file in every package needed.
+      // the packages will be the current package, and also all defined in the `relative-packages` key in the package.json
+      return allPackages.some(pkg => {
+        const pkgSegments = pkg.split(path.sep);
+        return pkgSegments.every(
+          (packageSegment, i) => packageSegment === fileSegments[i]
+        );
+      });
     });
 
-    if (packageFile) {
+    if (validFile) {
       debug(
         'Including commit "%s" because it modified package file "%s".',
         subject,
-        packageFile
+        validFile
       );
     }
 
-    return !!packageFile;
+    return !!validFile;
   });
 };
 
